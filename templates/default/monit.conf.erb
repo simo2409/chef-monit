@@ -1,0 +1,131 @@
+set daemon  60
+set logfile syslog facility log_daemon
+<%- if node["monit"]["smtp"]["enabled"] -%>
+set mailserver <%= node["monit"]["smtp"]["hostname"] %> port <%= node["monit"]["smtp"]["port"] %>
+  username "<%= node["monit"]["smtp"]["username"] %>" password "<%= node["monit"]["smtp"]["password"] %>"
+  using sslv3
+  WITH TIMEOUT 15 SECONDS
+<%- else -%>
+set mailserver localhost
+<%- end -%>
+
+set mail-format { from: <%= node["monit"]["alerts"]["from"] %> }
+
+<%- node["monit"]["alerts"]["to"].each do |to_addr| -%>
+  set alert <%= to_addr %>
+<%- end -%>
+
+set httpd port <%= node["monit"]["web_interface"]["port"] %> and
+  use address <%= node["automatic"]["ipaddress"] %>
+  allow "<%= node["monit"]["web_interface"]["username"] %>":"<%= node["monit"]["web_interface"]["password"] %>"
+
+###############################
+# System                      #
+###############################
+  check device root_filesystem with path /
+    if space usage > 80% then alert
+    if space usage > 90% then alert
+
+  check system "<%= node["monit"]["host"] %>"
+    if loadavg (1min) > 4 for 3 cycles then alert
+    if loadavg (5min) > 2 then alert
+    if memory usage > 90% for 3 cycles then alert
+    if swap usage > 70% for 3 cycles then alert
+
+    <%- if node["monit"]["services_to_monitor"].keys.include?("nginx") -%>
+    if swap usage > 70% for 4 cycles then exec '/etc/init.d/nginx restart'
+    # Same as previous but doesnt send email for changed pid of apache
+    #if swap usage > 70% for 4 cycles then exec '/usr/bin/monit restart nginx'
+    <%- end -%>
+
+  check file passwd with path /etc/passwd
+    if changed sha1 checksum then alert
+# END System
+
+<%- if node["monit"]["services_to_monitor"].keys.include?("nginx") -%>
+###############################
+# nginx                       #
+###############################
+  <%- if node["monit"]["services_to_monitor"]["nginx"]["pid_file"] -%>
+  check process nginx with pidfile <%= node["monit"]["services_to_monitor"]["nginx"]["pid_file"] %>
+    start program = "/usr/bin/systemctl start nginx"
+    stop program = "/usr/bin/systemctl stop nginx"
+  <%- end -%>
+
+  <%- if node["monit"]["services_to_monitor"]["nginx"]["conf"] -%>
+  check file nginx.conf with path <%= node["monit"]["services_to_monitor"]["nginx"]["conf"] %>
+    if changed sha1 checksum then alert
+  <%- end -%>
+# END Nginx
+<%- end -%>
+
+<%- if node["monit"]["services_to_monitor"].keys.include?("mariadb") -%>
+###############################
+# MariaDB                     #
+###############################
+  <%- if node["monit"]["services_to_monitor"]["mariadb"]["pid_file"] -%>
+  check process mysql with pidfile <%= node["monit"]["services_to_monitor"]["mariadb"]["pid_file"] %>
+    start program = "/usr/bin/systemctl start mysql"
+    stop program = "/usr/bin/systemctl stop mysql"
+  <%- end -%>
+
+  <%- if node["monit"]["services_to_monitor"]["mariadb"]["conf"] -%>
+  check file my.cnf with path <%= node["monit"]["services_to_monitor"]["mariadb"]["conf"] %>
+    if changed sha1 checksum then alert
+  <%- end -%>
+# END MySQL
+<%- end -%>
+
+<%- if node["monit"]["services_to_monitor"].keys.include?("openssh") -%>
+###############################
+# sshd                        #
+###############################
+  <%- if node["monit"]["services_to_monitor"]["openssh"]["pid_file"] -%>
+  check process sshd with pidfile <%= node["monit"]["services_to_monitor"]["openssh"]["pid_file"] %>
+    start program = "/usr/bin/systemctl start sshd"
+    stop program = "/usr/bin/systemctl stop sshd"
+  <%- end -%>
+    
+  <%- if node["monit"]["services_to_monitor"]["openssh"]["conf"] -%>
+  check file sshd_config with path <%= node["monit"]["services_to_monitor"]["openssh"]["conf"] %>
+    if changed sha1 checksum then alert
+  <%- end -%>
+# END SSHD
+<%- end -%>
+
+<%- if node["monit"]["services_to_monitor"].keys.include?("memcached") -%>
+###############################
+# memcached                   #
+###############################
+  <%- if node["monit"]["services_to_monitor"]["memcached"]["pid_file"] -%>
+  check process memcached with pidfile <%= node["monit"]["services_to_monitor"]["memcached"]["pid_file"] %>
+    start program = "/usr/bin/systemctl start memcached"
+    stop program = "/usr/bin/systemctl stop memcached"
+  <%- end -%>
+
+  <%- if node["monit"]["services_to_monitor"]["memcached"]["conf"] -%>
+  check file memcached.conf with path <%= node["monit"]["services_to_monitor"]["memcached"]["conf"] %>
+    if changed sha1 checksum then alert
+  <%- end -%>
+# END Memcached
+<%- end -%>
+
+<%- if node["monit"]["application"] && node["monit"]["application"]["deploy_dir"] && node["monit"]["application"]["name"] -%>
+###############################
+# Deploy checks               #
+###############################
+
+check directory rails_app path <%= node["monit"]["application"]["deploy_dir"] %><%= node["monit"]["application"]["name"] %>/current
+
+  <%- node["monit"]["deploy_alerts"]["to"].each do |to_addr| -%>
+    alert <%= to_addr %> with mail-format {
+                  from:     <%= node["monit"]["deploy_alerts"]["from"] %>
+                  subject:  $HOST New deploy finished
+                  message:  A deploy is just finished on the $HOST server
+                  Your faithful employee,
+                  monit
+                }
+  <%- end -%>
+  if changed timestamp
+    then alert
+<%- end -%>
